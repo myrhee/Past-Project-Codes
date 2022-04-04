@@ -1,0 +1,419 @@
+---
+title: "Final Project: Data Analysis on Cholangitis"
+author: "Morgan Rhee"
+date: "December 15, 2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, tidy.opts=list(width.cutoff=60), tidy=TRUE)
+
+library(leaps)
+library(pheatmap)
+library(ggplot2)
+library(dplyr)
+```
+
+## **Visualization**
+
+### **1. Importing the Data**
+
+To analyze the data, we must first import the data and take a look at the data given. After looking at the data, a total of 106 patients did not give their consent to the randomization process, as well as a group of 25 patients who received a liver transplant. However, we will still include the 19 who gave consent and had a liver transplant due to the nature of its influence to other variables. Thus, the group of patients that denied consent received neither the drug nor the placebo (drug == "NA"), indicating that we should remove these 106 individuals, as well as additional NA values that will affect the analysis and regressions we will perform..  
+```{r}
+cholang_dat <- read.csv("cholangitis.csv")
+cholang_dat <- na.omit(subset(cholang_dat, drug != "NA"))
+```
+
+
+By looking at the first 6 columns, we can see that there is a total of 20 variables, which range from being either continuous or categorical variables. Thus, we should convert all categorical variables to factors in order to effectively perform statistical modeling.
+
+```{r}
+cholang_dat$status <- factor(cholang_dat$status)
+cholang_dat$drug <- factor(cholang_dat$drug)
+cholang_dat$sex <- factor(cholang_dat$sex)
+cholang_dat$ascites <- factor(cholang_dat$ascites)
+cholang_dat$hepatomegaly <- factor(cholang_dat$hepatomegaly)
+cholang_dat$spiders <- factor(cholang_dat$spiders)
+cholang_dat$edema <- factor(cholang_dat$edema)
+cholang_dat$stage <- factor(cholang_dat$stage)
+head(cholang_dat)
+```
+### **2. Basic Exploratory Data Analysis**
+
+We will first investigate the data, performing a general summary and overview of the entire data set using some statistical functions: dim(), str() and summary().
+```{r}
+dim(cholang_dat)
+```
+```{r}
+str(cholang_dat)
+```
+
+```{r}
+summary(cholang_dat)
+```
+
+Looking at the general summary, we can notice a couple of things from several variables: age, sex, and stage. With age, we can see that the age range of patients vary quite a bit, the youngest being 9598 days old (~ 26 years) and the oldest being 28650 days old (~ 78 years). Furthermore, out of the 307 patients, 271 of the patients were female, indicating a potential biased study against sex due to the much smaller pool of male individuals. Finally, in regards to the histologic stage of disease, a larger number of patients were in the latter portion, having a more serious stage of 3 or 4. 
+
+
+Following this, plotting a histogram for the number of days from registration to being alive is plotted below.
+```{r}
+cholang_alive <- subset(cholang_dat, status == "C")
+hist(cholang_alive$n_days, main = "Number of Days Alive Until End of Study", xlab = "Days Alive", breaks = 20, col = "light green")
+abline(v = mean(cholang_alive$n_days), lty = "dashed")
+abline(v = median(cholang_alive$n_days))
+legend("topright", legend = c("Median", "Mean"), lty = c("solid", "dashed"))
+```
+While the histogram does not follow a normal histogram, we can say that it is roughly centered around the middle, with lower bars on the ends. Seeing as how the median was to the left of the mean, we can come to the conclusion that the data is skewed more to the right with a rather heavier tail. Especially because we have values spreading out to lower than 1000 days alive to as large as about 5000 days alive (given that the mean is about 2500), the histogram is spread relatively far from the mean.
+
+Plotting the same data as a boxplot (with the different statuses) gives us a different approach to visualize such data. However, a key point to see here is that there are no outliers in this plot, indicating that all plots in the this respective data set are within 1.5 of the IQR. 
+```{r}
+par(mfrow = c(1, 1))
+boxplot(cholang_dat$n_days ~ cholang_dat$status, main = "Number of Days Alive Until End of Study", breaks=100, ylab = "Days Alive")
+```
+To better analyze two variables in specific, a mosaic plot was used to analyze their relating percentages. In particular, the relationship between status and stage, as well as drug and status were analyzed to not only determine if the drug had a positive effect but also to see the range of the patients in the study.
+
+```{r}
+mosaicplot(~ stage + status, data = cholang_dat, las = 1, col = palette())
+```
+We can see that most admitted patients had a more sever stage of cholangitis (indicated by the wider bars of stage 3 and 4 proportional to the total plot), the percentage of patients surviving at the end of the study decreasing as the stage increased. This was the opposite for patients who died, as the percentage increased as the stage increased. 
+
+```{r}
+mosaicplot(~ drug + status, data = cholang_dat, las = 1, col = palette())
+```
+Since the number of patients who received the drug and the placebo were almost identical, we can see that there is not as much diversity in terms of the bar widths. Even with the statuses, we see that a similarity in percentages across the different statuses. What is interesting to note is that there were slightly more patients who received the placebo and survived than patients who received the actual drug and survived.
+
+Following the analysis of simply two variables (status and stage, status and drug), demonstrating the relationship of all variables is crucial in exploratory data analysis. A scatter plot between the response variable (n-days) and the continuous variables are plotted below. The log of the data is taken in order to remove any skewness and/or clustering of data that prevents us from analyzing the data properly.
+
+```{r}
+new_cholang <- cholang_dat[, -c(1, 3,7:10)]
+new_cholang %>% select(where(is.numeric)) -> cholang.select
+cholang.log <- log(cholang.select)
+apply(cbind(combn(1:11, 2),
+combn(11:1, 2)), 2, function(x) {
+pair <- cholang.log[,x]
+pair$x.name <- names(pair)[1]
+pair$y.name <- names(pair)[2]
+names(pair)[1:2] <- c("x", "y")
+pair[sample(1:nrow(pair), 100),]
+}
+) %>% do.call(rbind, .) -> cholang.pairs
+cholang.pairs %>% ggplot(
+aes(x = x, y = y)
+) + geom_point(size = 0.01, shape = 1, alpha = 0.2) +
+facet_grid(y.name ~ x.name, scales = "free") +
+theme_bw() + theme(axis.title = element_blank())
+```
+
+In addition, A pairs plot is plotted below, removing the variables that are in factors since pairs plot only takes in a matrix of numeric values.
+
+```{r}
+smallScores <- cholang_dat[,-c(1,3,4,6:10, 20)]
+pairs(smallScores)
+```
+We can see that the plot is not only quite hard to read due to the large number of variables, but also very clustered in various regions. There are no variables that demonstrate a strong linear relationship in the two plots above, with many groups of points covering the majority of the plot and several variables demonstrating heteroskedasticity. We improve this plot below with inputted histograms along the diagonal.
+
+```{r}
+panel.hist <- function(x, ...) {
+    usr <- par("usr")
+    on.exit(par(usr))
+    par(usr = c(usr[1:2], 0, 1.5))
+    h <- hist(x, plot = FALSE)
+    breaks <- h$breaks
+    nB <- length(breaks)
+    y <- h$counts
+    y <- y/max(y)
+    rect(breaks[-nB], 0, breaks[-1], y)
+}
+pairs(smallScores, lower.panel = panel.smooth, col = c("red", 
+    "black"), diag.panel = panel.hist)
+```
+Finally, because there are too many points on the plot (to the point where correlation and proper analysis is difficult to see), the sample correlation is plotted instead in an attempt to better understand and see if high correlations exist between variables.
+
+```{r}
+panel.cor <- function(x, y, digits = 2, prefix = "", 
+    cex.cor, ...) {
+    usr <- par("usr")
+    on.exit(par(usr))
+    par(usr = c(0, 1, 0, 1))
+    r <- abs(cor(x, y, use = "pairwise.complete.obs"))
+    txt <- format(c(r, 0.123456789), digits = digits)[1]
+    txt <- paste0(prefix, txt)
+    if (missing(cex.cor)) 
+        cex.cor <- 0.8/strwidth(txt)
+    text(0.5, 0.5, txt, cex = cex.cor * r)
+}
+pairs(smallScores, lower.panel = panel.smooth, upper.panel = panel.cor, 
+    col = c("red", "black"), diag.panel = panel.hist)
+```
+We can see that while the pairs plot did help in demonstrating if a strong relationship existed between two variables, the abundant number of variables made it hard to clearly see such relationship. Utilizing a heatmap to represent the large data (only with numeric values) with colors might be more efficient.
+
+```{r}
+cor_dat <- cor(cholang_dat[,-c(1,3,4,6:10,20)], use="complete.obs")
+pheatmap(cor_dat)
+```
+Utilizing a heat map over a pairs plot seems to be more effective in demonstrating correlations. From the plotted data above, we can see that there are stronger correlations near the right bottom, for most of the levels of different substances that are in the body. While they may seem to be correlated in high levels, we cannot forget the fact that they are all in different modes of measurement, ranging from [mg/dl] to [U/liter] to [ug/day]. Regardless, the plotting of the heat map makes for a **better representation** of seeing what variables are most correlated to each other.
+
+We can also plot the data so that outliers (if there are any) do not force the range to cover the whole data by changing the bin range to different quantile settings that will cover some of the larger end values. 
+
+
+```{r}
+cholScaled <- scale(cholang_dat[, sapply(cholang_dat, is.numeric)])
+cho <- cholang_dat[, !sapply(cholang_dat, is.numeric)]
+seqPal2 <- colorRampPalette(c("orange", "black", "blue"))(50)
+seqPal2 <- (c("yellow", "gold2", seqPal2))
+seqPal2 <- rev(seqPal2)
+colstatus <- c("Blue", "Yellow", "Red")
+names(colstatus) <- c("C","CL","D")
+colsex <- c("pink","blue")
+names(colsex) <- c("F", "M")
+coldrug <- c("green","orange")
+names(coldrug) <- c("D-penicillamine", "Placebo")
+
+pheatmap(cholScaled, scale = "column", color = seqPal2,
+breaks = seq(quantile(cholScaled, 0.05), quantile(cholScaled,
+0.95), length.out = length(seqPal2) + 1), labels_row = rep("",
+nrow(cholang_dat)), annotation_colors = list(status = colstatus,
+drug = coldrug, sex = colsex),
+annotation_row = cho[, c(1,2,3)])
+```
+
+
+### **3A. Multivariate Regression Analysis**
+
+For the multivariate regression, we will analyze the relationship between the response variable— the number of days "n-days"— and several covariates/explanatory variables. We can remove the variable "id" because it will not provide a numeric correlation, given that it is simply a unique identifier for every patient. In addition, status, ascites, hepatomegaly, spiders, edema can be removed since we are looking for a relationship with potential influencing variables of continuous values.
+
+To start, several co-plots were plotted below: relationship of number of days against albumin/sex/stage, conditional on the type of drug given. The three explanatory variables were chosen based on strong or interesting correlations analyzed above. 
+
+```{r}
+new_cholang <- cholang_dat[, -c(1, 3,7:10)]
+coplot(n_days ~ albumin | drug, data = new_cholang)
+```
+With the protein albumin, both types of drugs injected had a wide yet increasing relationship, as higher levels of albumin indicated generally a trend of longer number of days alive. Both plots demonstrate a heteroskedastic relationship, the clustering of plots spreading out.
+
+```{r}
+coplot(n_days ~ sex | drug, data = new_cholang)
+```
+While there were certainly much more females in the study than males, what is interesting to note about this specific study is that for males, the effect of the drug seemed to quite extreme. While there were more D-penicillamine injected men who passed the 4000 day mark than the placebo male patients, there also respectively seemed to be more male patients who had lower number of days. For women, it was difficult to compare a relationship due to the scattered nature of the plots and the almost uniform range across all number of days from 0 to over 4000.
+
+```{r}
+coplot(n_days ~ stage | drug, data = new_cholang)
+```
+For stage, although the spread of number of days was wide across all stages, we notice that the stage and n_days had a somewhat decreasing, inverse relationship, the number of days decreasing as stage increased for patients. This relationship applicable to both drugs, regardless of what the patient received, and patients with earlier stages of cholangitis has a stronger likelihood of longer days.
+
+Following some initial visualizations, the regression analysis begins by fitting a model between the exploratory and response variables.
+
+```{r}
+fit <- lm(n_days ~ ., data = cholang.select)
+summary(fit)
+```
+We can see that the significant values are only bilirubin, albumin, copper, and alk_phos.
+
+However, because the values are quite large and ranging diversely, the explanatory variables are all scaled and their respective coefficients from the model are found.
+```{r}
+scaledchol <- cholang.select
+scaledchol[,-1] <- scale(scaledchol[,-1])
+ftScale <- lm(n_days ~., data = scaledchol)
+summary(ftScale)
+```
+```{r}
+coef(ftScale)
+```
+The correlation of the variables were also determined below; what we can see is that many of the correlation values are quite low for these values, many in the negative and some of the highest being less than 0.5. Even with these relatively larger correlations, we can see that some of them are not even related to n_days, which is interesting to note as we are using "n_days" as our response variable.
+
+```{r}
+cor(scaledchol)
+```
+In addition to the fitted models, some statistical information are determined below: fitted values, residuals, RSS, TSS, Rsq to demonstrate how well the model fits with the produced regression as well as to provide a statistical foundation.
+```{r}
+fitted.values <- ftScale$fitted.values
+residuals <- ftScale$residuals
+RSS <- sum(residuals^2)
+TSS <- sum((cholang.select$n_days - mean(cholang.select$n_days))^2)
+Rsq <- 1 - RSS/TSS
+# 
+RSS
+TSS
+Rsq
+```
+
+If the regression equation works well, we can expect that when we plot fitted values to the observed values, then the two values would be close to each other. However, given the relatively low correlations, we see that the values to do not fit as close as they could be, and rather demonstrate a general loose correlation. Disregarding some of the outliers, we can not state that the fitted and observed values are not correlated; they are correlated but not as high as other data sets we have previously seen this semester.
+
+```{r}
+plot(fitted(fit), cholang.select$n_days, xlab = "Fitted Values", ylab = "Number of Days", col = c("red","blue"))
+```
+
+### **3B. Variable Selection**
+
+In the analysis above, we used all exploratory variables, which could have included unnecessary variables that may have hindered the correlation values and plots. Variable selection will be performed on the cholangitis data set to determine if we can obtain a simpler model that eliminates both the noise and collinearity between variables. 
+
+First, regsubsets is used to give the best model with the respective number of k variables we are going to be using from the residual sum of squares.
+
+```{r}
+bDays <- regsubsets(n_days ~ ., cholang.select)
+summary(bDays)
+```
+
+From this summary, we can interpret the data set as having the best model (of RSS) with bilirubin if the model is with only one explanatory variable. Following, if it is with two, the best are bilirubin and albumin, three with bilirubin, albumin, and alk_phos, and four with bilirubin, albumin, alk_phos, and copper. The summary results in 8 regression models.
+
+In order to find the best k-sized models, we can use the following function to determine when the AIC and the CV are lowest. In addition to regression subsets found above, we can use cross validation to find the best model.
+
+```{r}
+
+permutation <- sample(1:nrow(cholang.select))
+folds <- cut(1:nrow(cholang.select), breaks = 10, labels = FALSE)
+predErrorMat <- matrix(nrow = 10, ncol = nrow(summary(bDays)$which))
+for (i in 1:10) {
+    testIndexes <- which(folds == i, arr.ind = TRUE)
+    testData <- cholang.select[permutation, ][testIndexes, ]
+    trainData <- cholang.select[permutation, ][-testIndexes, 
+        ]
+    predError <- apply(summary(bDays)$which[, -1], 1, 
+        function(x) {
+            lmObj <- lm(trainData$n_days ~ ., data = trainData[, 
+                -1][, x, drop = FALSE])
+            testPred <- predict(lmObj, newdata = testData[, 
+                -1])
+            mean((testData$n_days - testPred)^2)
+        })
+    predErrorMat[i, ] <- predError
+}
+
+
+LOOCV <- function(lm) {
+    vals <- residuals(lm)/(1 - lm.influence(lm)$hat)
+    sum(vals^2)/length(vals)
+}
+calculateCriterion <- function(x = NULL, y, dataset, lmObj = NULL) {
+    sigma2 = summary(lm(y ~ ., data = dataset))$sigma^2
+    if (is.null(lmObj)) 
+        lmObj <- lm(y ~ ., data = dataset[, x, drop = FALSE])
+    sumlmObj <- summary(lmObj)
+    n <- nrow(dataset)
+    p <- sum(x)
+    RSS <- sumlmObj$sigma^2 * (n - p - 1)
+    c(R2 = sumlmObj$r.squared, R2adj = sumlmObj$adj.r.squared, 
+        `RSS/n` = RSS/n, LOOCV = LOOCV(lmObj), Cp = RSS/n + 
+            2 * sigma2 * (p + 1)/n, CpAlt = RSS/sigma2 - 
+            n + 2 * (p + 1), AIC = AIC(lmObj), BIC = BIC(lmObj))
+}
+critSeat <- apply(summary(bDays)$which[, -1], 1, calculateCriterion, 
+    y = cholang.select$n_days, dataset = cholang.select[, -1])
+critSeat <- t(critSeat)
+critSeat <- cbind(critSeat, CV = colMeans(predErrorMat))
+critSeat
+
+```
+Based on the AIC and CV values, we can see that the best model is that of size 4. 
+
+Just in case, we can confirm which is the best model by determining what the best model is will be with a stepwise regression method, where we will add/remove a variable until we do not get any further improvements. 
+
+```{r}
+stepDay <- step(ftScale, trace = 0, direction = "both")
+stepDay
+```
+We can see here as well that the best model is the model with size 4, the 4 variables being **bilirubin, albumin, copper and alk_phos.** Therefore, our model is best fitted as N_DAYS = 1999.1 - 308.2 * BILIRUBIN + 354 * ALBUMIN - 227.5 * COPPER + 285 * ALK_PHOS.
+
+
+### **3C. Regression Diagnostics**
+
+Finally, in order to see if any regression assumptions are violated, we will plot the diagnostic plots for the final model lm(formula = n_days ~ bilirubin + albumin + copper + alk_phos, data = scaledchol).
+
+```{r}
+par(mfrow = c(2,2))
+plot(stepDay)
+```
+1. Residuals vs Fitted Plot --> Although the correlation between $\hat{y}$ and the residuals should be zero, we see that there is a non-linear relationship between the residuals and the fitted values. In addition, as the fitted values increase numerically, we can also notice that there is heteroscedasticity, indicating that the variance is different across the observations. 
+
+2. Scale-Location Plot --> Associated with the Residuals vs Fitted Plot is the Scale-Location plot, where it demonstrates an increasing pattern. Since the scale-location plot plots the square root of the absolute value of the residuals against the fitted values, if we see anything other than a constant pattern, we can conclude that it is heteroscedasticity.
+
+3. Normal Q-Q Plot --> In the plot of the standardized residuals, the plots seem to be located straight along the line, where every point in the final model is a represented as a quantile. Especially from [-2, 2] from the Theoretical Quantiles, we can see that the data set of the final model follows a strong normal distribution.
+
+4. Residuals vs Leverage Plot --> The Residuals vs Leverage Plot can help us in detecting outliers and other observations we should be careful of. Since large leverage results can indicate possible outlier points, we can see in our cholangitis plot that i = 47, 54, 55 seem to be potential outlier points.
+
+Finally, since we do not have a particular aspect to determine if there were any violations to independence, we have to believe that there were no violations to independence, assuming that the data was collected in a fair, with-consent manner.
+
+Analysis on the overall data set can also be made to see if any assumptions were violated.
+
+```{r}
+par(mfrow = c(2,2))
+plot(fit)
+```
+
+1. Residuals vs Fitted Plot --> We can see some heteroscedasticity in the data, where variance is clearly unequal across the plot.
+
+2. Scale-Location Plot --> Associated with the Residuals vs Fitted Plot is the Scale-Location plot, where it demonstrates an increasing pattern. Since the scale-location plot plots the square root of the absolute value of the residuals against the fitted values, if we see anything other than a constant pattern, we can conclude that it is heteroscedasticity.
+
+3. Normal Q-Q Plot --> In the plot of the standardized residuals, the plots seem to be located along the line, where every point in the cholangitis data set is a quantile. Following a straight line across most if not all points demonstrates a normal distribution of the dataset.
+
+4. Residuals vs Leverage Plot --> The Residuals vs Leverage Plot can help us in detecting outliers and other observations we should be careful of. Since large leverage results can indicate possible outlier points, we can see in our cholangitis plot that i = 55, 86, 163 seem to be potential outlier points.
+
+### **4. Logistic Regression**
+
+For logistic regression, since we are fitting a model for the survival status of a patient at the end of the study, given the explanatory variables, we must filter the given data set differently than what we have done above. In addition, any NA values in the data must be removed to allow for analysis of the fitted model.
+
+```{r}
+cholang_dat2 <- read.csv("cholangitis.csv")
+cholang_dat2 <- na.omit(subset(cholang_dat2, status != "CL"))
+```
+
+Our main variable here is the "status" variable, which is now a binary variable with either "C" denoting that the patient is not dead or "D" denoting that the patient is dead.
+
+We will first fit the logistic model, removing the categorical variables and converting the column "status" to a factor of numeric indicators, where 0 = "D" (Dead) and 1 = "C" (Not Dead).
+
+```{r}
+cholang_dat2$status <- as.numeric(factor(cholang_dat2$status, c("C", "D"))) - 1
+cholang_logistic <- cholang_dat2[, -c(1,4,6:10,20)]
+glmChol <- glm(status ~., family = binomial, data = cholang_logistic)
+summary(glmChol)
+```
+
+We can interpret the function above as estimates for our parameters, where the change in log-odds of the event of a level of any variable above increase by one, assuming that all the other variables remain constant. This can be interpreted as being the same as the odds of a patient being alive being multiplied by exp(estimate) when the respective variable increases. For instance, we can see that the estimated coefficient of the variable "bilirubin" is 0.06608, which indicates the change in log-odds of the event of a patient not dying when the level of biliburin increases by one.
+
+Next, the fitted probabilities in logistic regression for each observations in our sample is found.
+
+```{r}
+chol_logisticFit <- fitted(glmChol)
+head(chol_logisticFit)
+```
+
+Using the data above, we can plot the actual observed response values agains the fitted values
+```{r}
+boxplot(fitted(glmChol) ~ cholang_dat2$status, at = c(0,1), col = c("red", "blue"))
+points(x = jitter(cholang_dat2$status), fitted(glmChol))
+```
+
+The Residual Deviance (RD) is also calculated below to get a numerical measure of how "good" the fit is. As seen below, the value of RD is 235.9506, which is quite high and demonstrates a lack of fit for our model. 
+
+```{r}
+deviance(glmChol)
+```
+
+The deviance definitely comes with degrees of freedom (being n-p-1), we can attempt to use anova to compare the submodels, despite it not giving a significance value for comparing the submodel to the actual larger model at hand. The fitted function "f0" is a model with no variables.
+
+```{r}
+f0 <- glm(status ~ 1, family = binomial, data = cholang_logistic)
+anova(f0, glmChol)
+```
+Instead of Residual Deviance, we can use AIC as a measure of good fit, like we did above in linear regression.
+
+```{r}
+AIC(glmChol)
+```
+
+Again, we use the step function to compare the change in our RD values.
+
+```{r}
+step(glmChol, direction = "both", trace = 0)
+```
+
+We can see that the best model is that of size 7, removing the variables "bilirubin", "cholesterol", "albumin", and "platelets". While there are some limitations to using the step model— such as the nature of the function being to add/remove variables one at a time(leading to miss of possible best model) or the possibility of seeing a "best" model that is not found by this method— we utilize this procedure to see the model with the explanatory variables that have the most correlation to our response variable, which is status.
+
+Therefore, we can finalize the model to be STATUS = -14.20 - 0.0008467 * N_DAYS + 0.0001164 * AGE + 0.00501 * COPPER + 0.0002919 * ALK_PHOS + 0.008191 * SGOT + 0.006294 * TRYGLICERIDES + 0.9908 * PROTHROMBIN.
+
+
+
+
+
+
+
+
